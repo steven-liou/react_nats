@@ -1,39 +1,52 @@
-import { connect, StringCodec } from 'nats.ws';
+import { connect, consumerOpts, createInbox, StringCodec } from 'nats.ws';
 import React, { useEffect, useState } from 'react';
 import Messages from './Messages';
 const sc = StringCodec();
 
 function App() {
-  const [nc, setConnection] = useState(undefined);
+  const [natsClient, setConnection] = useState(undefined);
   const [lastError, setError] = useState('');
   const [messages, setMessages] = useState([]);
   let key = 0;
 
   useEffect(() => {
-    if (nc === undefined) {
+    if (natsClient === undefined) {
       async function natsConnect() {
+        const options = consumerOpts(); // creates a Consumer Options Object
+        options.deliverNew(); // ensures that the newest message on the stream is delivered to the consumer when it comes online
+        options.ackAll(); // acknowledges all previous messages
+        options.deliverTo(createInbox()); // ensures that the Consumer listens to a specific Subject
+        // options.callback(addMessage);
         try {
-          const nc = await connect({ servers: ['ws://0.0.0.0:8080'] });
-          setConnection(nc);
-          nc.subscribe('>', { callback: addMessage });
+          const natsClient = await connect({ servers: ['ws://0.0.0.0:8080'] });
+          setConnection(natsClient);
+          const jetStream = natsClient.jetstream();
+          const subscribedStream = await jetStream.subscribe('>', options);
+
+          await (async () => {
+            for await (const msg of subscribedStream) {
+              addMessage(msg);
+            }
+          })();
         } catch (err) {
           setError('error connecting');
           console.error(err);
         }
       }
-      const addMessage = (err, msg) => {
+      const addMessage = (msg) => {
         key++;
         const { subject, reply } = msg;
         const data = sc.decode(msg.data);
         const m = { subject, reply, data, key, time: new Date().toUTCString() };
+        console.log('🚀 ~ file: App.js ~ line 42 ~ addMessage ~ data', data);
         messages.unshift(m);
         const a = messages.slice(0, 10);
         setMessages(a);
-        natsConnect();
       };
+      natsConnect();
     }
-  }, [key, messages, nc]);
-  const state = nc ? 'connected' : 'not yet connected';
+  }, [key, messages, natsClient]);
+  const state = natsClient ? 'connected' : 'not yet connected';
   return (
     <div className="container">
       <h1>{state}</h1>
